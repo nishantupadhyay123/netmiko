@@ -195,6 +195,8 @@ class CiscoVxrSSH(CiscoXrSSH):
         else:  # nobreak
             raise IOError("Search pattern never detected in send_command: {},\
                             pattern found was: {}".format(search_pattern, output))
+        if current_time - start_time >= 10:
+            log.info("Command took {} seconds".format(current_time - start_time))
         output = output.replace("^@","")
         output = self._sanitize_output(output, strip_command=strip_command,
                                        command_string=command_string, strip_prompt=strip_prompt)
