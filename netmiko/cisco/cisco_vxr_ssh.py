@@ -38,8 +38,6 @@ class CiscoVxrSSH(CiscoXrSSH):
         """
         # 30 minutes
         self.max_read_timeout = kwargs.get('max_read_timeout', 1800)
-        kwargs.pop('max_read_timeout', None)
-
         super().__init__(**kwargs)
 
     def find_prompt(self, delay_factor=1):
