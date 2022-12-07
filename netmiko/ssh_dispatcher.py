@@ -132,6 +132,7 @@ FILE_TRANSFER_MAP = {
     'cisco_nxos': CiscoNxosFileTransfer,
     'cisco_xe': CiscoIosFileTransfer,
     'cisco_xr': CiscoXrFileTransfer,
+    'cisco_vxr': CiscoXrFileTransfer,
     'juniper_junos': JuniperFileTransfer,
     'linux': LinuxFileTransfer,
 }

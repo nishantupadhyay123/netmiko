@@ -4,8 +4,27 @@ from __future__ import unicode_literals
 import re
 import time
 import logging
+import os
+import paramiko
 
 from netmiko.cisco.cisco_xr import CiscoXrSSH
+from netmiko.netmiko_globals import BACKSPACE_CHAR
+from netmiko.utilities import get_structured_data
+
+work_dir = os.getenv('CAFYKIT_WORK_DIR')
+if work_dir:
+    formatter = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s',
+                                  datefmt='%Y-%m-%d %H:%M:%S')
+    paramiko_log_folder = os.path.join(work_dir, 'test_paramiko.log')
+    paramiko.util.log_to_file(paramiko_log_folder, level="DEBUG")
+    fh = logging.FileHandler(paramiko_log_folder)
+    fh.setFormatter(formatter)
+    log = logging.getLogger("netmiko")
+    log.addHandler(fh)
+    log.setLevel(logging.DEBUG)
+    log.addHandler(fh)
+else:
+    from netmiko import log
 
 
 class CiscoVxrSSH(CiscoXrSSH):
@@ -13,23 +32,175 @@ class CiscoVxrSSH(CiscoXrSSH):
     CiscoVxrSSH is based of CiscoXrSSH -- CiscoBaseConnection
     """
 
+    def __init__(self,
+                 **kwargs):
+        """Constructor
+        """
+        # 30 minutes
+        self.max_read_timeout = kwargs.get('max_read_timeout', 1800)
+        kwargs.pop('max_read_timeout', None)
+
+        super().__init__(**kwargs)
+
     def find_prompt(self, delay_factor=1):
         """Finds the current network device prompt, last line only.
 
+        :param delay_factor: See __init__: global_delay_factor
+        :type delay_factor: int
         """
-        pass
+        delay_factor = self.select_delay_factor(delay_factor)
+        self.clear_buffer()
+        self.write_channel(self.RETURN)
+        time.sleep(delay_factor * 0.1)
+        # Initial attempt to get prompt
+        prompt = self.read_channel()
+        vxr_pattern = "last login"
+        if vxr_pattern in prompt.lower():
+            time.sleep((delay_factor * 0.1) + 3)
+            prompt = self.read_channel()
+        autocommand_pattern = "executing autocommand"
+        if autocommand_pattern in prompt.lower():
+            time.sleep((delay_factor * 0.1) + 5)
+            prompt = self.read_channel()
+        cxr_pattern = "last switch-over"
+        if cxr_pattern in prompt.lower():
+            time.sleep((delay_factor * 0.1) + 3)
+            prompt = self.read_channel()
+        if self.ansi_escape_codes:
+            prompt = self.strip_ansi_escape_codes(prompt)
+
+        # Check if the only thing you received was a newline
+        prompt = prompt.strip()
+        start_time = time.time()
+        current_time = time.time()
+        while current_time - start_time < self.max_read_timeout and not prompt:
+            prompt = self.read_channel().strip()
+            if prompt:
+                log.info("Prompt found. Time Waited: {}".format(current_time - start_time), 5)
+                if self.ansi_escape_codes:
+                    prompt = self.strip_ansi_escape_codes(prompt).strip()
+            else:
+                log.info("Prompt not found. Time Waited: {}".format(current_time - start_time), 5)
+                self.write_channel(self.RETURN)
+                time.sleep(delay_factor * .1)
+
+            current_time = time.time()
+
+        # If multiple lines in the output take the last line
+        prompt = self.normalize_linefeeds(prompt)
+        prompt = prompt.split(self.RESPONSE_RETURN)[-1]
+        prompt = prompt.strip()
+        if not prompt:
+            raise ValueError("Unable to find prompt: {}".format(prompt))
+        time.sleep(delay_factor * .1)
+        self.clear_buffer()
+        return prompt
 
     def send_command(self, command_string, expect_string=None,
                      delay_factor=1, max_loops=500, auto_find_prompt=True,
                      strip_prompt=True, strip_command=True, normalize=True,
                      use_textfsm=False):
-        """Execute command_string on the SSH channel using a pattern-based mechanism. Generally
-         used for show commands. By default this method will keep waiting to receive data until the
-         network device prompt is detected. The current network device prompt will be determined
-         automatically.
         """
-        pass
+        Execute command_string on the SSH channel using a pattern-based mechanism. Generally
+        used for show commands. By default this method will keep waiting to receive data until the
+        network device prompt is detected. The current network device prompt will be determined
+        automatically.
 
-    def _read_channel(self):
-        """Generic handler that will read all the data from an SSH or telnet channel."""
-        pass
+        :param command_string: The command to be executed on the remote device.
+        :type command_string: str
+
+        :param expect_string: Regular expression pattern to use for determining end of output.
+            If left blank will default to being based on router prompt.
+        :type expect_string: str
+
+        :param delay_factor: Multiplying factor used to adjust delays (default: 1).
+        :type delay_factor: int
+
+        :param max_loops: max_loops is not used
+        :type max_loops: int
+
+        :param strip_prompt: Remove the trailing router prompt from the output (default: True).
+        :type strip_prompt: bool
+
+        :param strip_command: Remove the echo of the command from the output (default: True).
+        :type strip_command: bool
+
+        :param normalize: Ensure the proper enter is sent at end of command (default: True).
+        :type normalize: bool
+
+        :param use_textfsm: Process command output through TextFSM template (default: False).
+        :type normalize: bool
+        """
+        # Time to delay in each read loop
+        loop_delay = .2
+        config_large_msg = "This could be a few minutes if your config is large"
+        delay_factor = self.select_delay_factor(delay_factor)
+        log.info("In send_command, global_delay:{}, delay_factor:{}, max_read_timeout: {}".format(self.global_delay_factor,
+                                                                                                  delay_factor,
+                                                                                                  self.max_read_timeout))
+        # Find the current router prompt
+        if expect_string is None:
+            if auto_find_prompt:
+                try:
+                    prompt = self.find_prompt(delay_factor=delay_factor)
+                except ValueError:
+                    raise IOError("Prompt not Found before sending command")
+            else:
+                prompt = self.base_prompt
+            search_pattern = re.escape(prompt.strip())
+        else:
+            search_pattern = expect_string
+
+        if normalize:
+            command_string = self.normalize_cmd(command_string)
+
+        time.sleep(delay_factor * loop_delay)
+        self.clear_buffer()
+        self.write_channel(command_string)
+
+        output = ''
+        start_time = time.time()
+        current_time = time.time()
+        # Keep reading data until search_pattern is found or session is alive
+        while current_time - start_time < self.max_read_timeout and self.is_alive():
+            new_data = self.read_channel()
+            if new_data:
+                if self.ansi_escape_codes:
+                    new_data = self.strip_ansi_escape_codes(new_data)
+                output += new_data
+                try:
+                    lines = output.split(self.RETURN)
+                    first_line = lines[0]
+                    # First line is the echo line containing the command. In certain situations
+                    # it gets repainted and needs filtered
+                    if BACKSPACE_CHAR in first_line:
+                        pattern = search_pattern + r'.*$'
+                        first_line = re.sub(pattern, repl='', string=first_line)
+                        lines[0] = first_line
+                        output = self.RETURN.join(lines)
+                except IndexError:
+                    pass
+                if re.search(search_pattern, output):
+                    break
+
+                if re.search(config_large_msg, output):
+                    output = self.send_command(command_string=self.RETURN,
+                                               auto_find_prompt=False, strip_prompt=False, strip_command=False, )
+                    output += self.read_channel()
+                    if re.search(search_pattern, output):
+                        break
+            else:
+                time.sleep(loop_delay)
+            log.info("Pattern not found. Time waited: {}".format(current_time - start_time))
+            current_time = time.time()
+
+        else:  # nobreak
+            raise IOError("Search pattern never detected in send_command: {},\
+                            pattern found was: {}".format(search_pattern, output))
+        output = output.replace("^@","")
+        output = self._sanitize_output(output, strip_command=strip_command,
+                                       command_string=command_string, strip_prompt=strip_prompt)
+        if use_textfsm:
+            output = get_structured_data(output, platform=self.device_type,
+                                         command=command_string.strip())
+        return output

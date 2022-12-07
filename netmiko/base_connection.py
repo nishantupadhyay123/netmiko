@@ -60,7 +60,8 @@ class BaseConnection(object):
                  key_file=None, allow_agent=False, ssh_strict=False, system_host_keys=False,
                  alt_host_keys=False, alt_key_file='', ssh_config_file=None, timeout=90,
                  session_timeout=60, blocking_timeout=8, keepalive=0, default_enter=None,
-                 response_return=None, serial_settings=None, fast_cli=False, session_log=None):
+                 response_return=None, serial_settings=None, fast_cli=False, session_log=None,
+                 max_read_timeout=None):
         """
         Initialize attributes for establishing connection to target device.
 
