@@ -92,6 +92,7 @@ class CiscoVxrSSH(CiscoXrSSH):
 
         time.sleep(loop_delay)
         self.clear_buffer()
+        log.info("Prompt is: {}.".format(prompt))
         return prompt
 
     def find_prompt2(self, delay_factor=1):
@@ -262,6 +263,94 @@ class CiscoVxrSSH(CiscoXrSSH):
                         self.max_read_timeout, search_pattern, output))
         if current_time - start_time >= 10:
             log.info("Command took {} seconds".format(current_time - start_time))
+        output = self._sanitize_output(output, strip_command=strip_command,
+                                       command_string=command_string, strip_prompt=strip_prompt)
+        if use_textfsm:
+            output = get_structured_data(output, platform=self.device_type,
+                                         command=command_string.strip())
+        return output
+
+    def send_command_expect(self, command_string, expect_string=None,
+                            delay_factor=1, max_loops=500, auto_find_prompt=True,
+                            strip_prompt=True, strip_command=True, normalize=True,
+                            use_textfsm=False):
+        """Support previous name of send_command method.
+
+        :param args: Positional arguments to send to send_command()
+        :type args: list
+
+        :param kwargs: Keyword arguments to send to send_command()
+        :type kwargs: dict
+        """
+        # Time to delay in each read loop
+        loop_delay = .2
+        config_large_msg = "This could be a few minutes if your config is large"
+        # Default to making loop time be roughly equivalent to self.timeout (support old max_loops
+        # and delay_factor arguments for backwards compatibility).
+        delay_factor = self.select_delay_factor(delay_factor)
+        if delay_factor == 1 and max_loops == 500:
+            # Default arguments are being used; use self.timeout instead
+            max_loops = int(self.timeout / loop_delay)
+        log.info("In send_command, global_delay:{}, delay_factor:{}, max_loops:{}".format(
+            self.global_delay_factor, delay_factor, max_loops))
+        # Find the current router prompt
+        if expect_string is None:
+            if auto_find_prompt:
+                try:
+                    prompt = self.find_prompt(delay_factor=delay_factor)
+                except ValueError:
+                    log.info("From send_command: ValueError encountered from find_prompt() is not re-raised")
+                    prompt = self.base_prompt
+            else:
+                prompt = self.base_prompt
+            search_pattern = re.escape(prompt.strip())
+        else:
+            search_pattern = expect_string
+
+        if normalize:
+            command_string = self.normalize_cmd(command_string)
+
+        time.sleep(delay_factor * loop_delay)
+        self.clear_buffer()
+        self.write_channel(command_string)
+
+        i = 1
+        output = ''
+        # Keep reading data until search_pattern is found or until max_loops is reached.
+        while i <= max_loops:
+            new_data = self.read_channel()
+            if new_data:
+                if self.ansi_escape_codes:
+                    new_data = self.strip_ansi_escape_codes(new_data)
+                output += new_data
+                try:
+                    lines = output.split(self.RETURN)
+                    first_line = lines[0]
+                    # First line is the echo line containing the command. In certain situations
+                    # it gets repainted and needs filtered
+                    if BACKSPACE_CHAR in first_line:
+                        pattern = search_pattern + r'.*$'
+                        first_line = re.sub(pattern, repl='', string=first_line)
+                        lines[0] = first_line
+                        output = self.RETURN.join(lines)
+                except IndexError:
+                    pass
+                if re.search(search_pattern, output):
+                    break
+
+                if re.search(config_large_msg, output):
+                    output = self.send_command(command_string=self.RETURN,
+                                               auto_find_prompt=False, strip_prompt=False, strip_command=False,)
+                    output += self.read_channel()
+                    if re.search(search_pattern, output):
+                        break
+            else:
+                time.sleep(delay_factor * loop_delay)
+            i += 1
+        else:   # nobreak
+            raise IOError("Search pattern never detected in send_command_expect: {},\
+                            pattern found was: {}".format(search_pattern, output))
+
         output = self._sanitize_output(output, strip_command=strip_command,
                                        command_string=command_string, strip_prompt=strip_prompt)
         if use_textfsm:
