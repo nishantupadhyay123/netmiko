@@ -702,6 +702,9 @@ class BaseConnection(object):
         :param strip_command:
         :type strip_command:
         """
+        # Replace Null Characters sent while checking session (alive) status
+        output = output.replace("^@","")
+
         if self.ansi_escape_codes:
             output = self.strip_ansi_escape_codes(output)
         output = self.normalize_linefeeds(output)

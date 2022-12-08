@@ -46,23 +46,77 @@ class CiscoVxrSSH(CiscoXrSSH):
         :param delay_factor: See __init__: global_delay_factor
         :type delay_factor: int
         """
-        delay_factor = self.select_delay_factor(delay_factor)
+        loop_delay = 0.1
         self.clear_buffer()
         self.write_channel(self.RETURN)
-        time.sleep(delay_factor * 0.1)
+        time.sleep(loop_delay)
+
+        prompt = None
+        start_time = time.time()
+        current_time = time.time()
+        while current_time - start_time < self.max_read_timeout and self.is_alive():
+            prompt = self.read_channel().strip()
+            prompt = prompt.replace("^@", "")
+            if prompt:
+                log.info("Prompt found. Time Waited: {}".format(current_time - start_time))
+                break
+            else:
+                log.info("Prompt not found. Time Waited: {}".format(current_time - start_time))
+                time.sleep(loop_delay)
+
+            current_time = time.time()
+        else:
+            if not self.is_alive():
+                raise IOError("Session went down while finding prompt")
+            else:
+                raise IOError("Prompt not found after waiting for {} seconds".format(self.max_read_timeout))
+
+        vxr_pattern = "last login"
+        if vxr_pattern in prompt.lower():
+            time.sleep(loop_delay + 3)
+            prompt = self.read_channel()
+        autocommand_pattern = "executing autocommand"
+        if autocommand_pattern in prompt.lower():
+            time.sleep(loop_delay + 5)
+            prompt = self.read_channel()
+        cxr_pattern = "last switch-over"
+        if cxr_pattern in prompt.lower():
+            time.sleep(loop_delay + 3)
+            prompt = self.read_channel()
+        if self.ansi_escape_codes:
+            prompt = self.strip_ansi_escape_codes(prompt)
+
+        prompt = self.normalize_linefeeds(prompt)
+        prompt = prompt.split(self.RESPONSE_RETURN)[-1]
+        prompt = prompt.strip()
+
+        time.sleep(loop_delay)
+        self.clear_buffer()
+        return prompt
+
+    def find_prompt2(self, delay_factor=1):
+        """Finds the current network device prompt, last line only.
+
+        :param delay_factor: See __init__: global_delay_factor
+        :type delay_factor: int
+        """
+        loop_delay = 0.1
+        self.clear_buffer()
+        self.write_channel(self.RETURN)
+        time.sleep(loop_delay)
         # Initial attempt to get prompt
         prompt = self.read_channel()
         vxr_pattern = "last login"
         if vxr_pattern in prompt.lower():
-            time.sleep((delay_factor * 0.1) + 3)
+            time.sleep(loop_delay + 3)
             prompt = self.read_channel()
         autocommand_pattern = "executing autocommand"
         if autocommand_pattern in prompt.lower():
-            time.sleep((delay_factor * 0.1) + 5)
+            time.sleep(loop_delay + 5)
             prompt = self.read_channel()
         cxr_pattern = "last switch-over"
         if cxr_pattern in prompt.lower():
-            time.sleep((delay_factor * 0.1) + 3)
+            time.sleep(loop_delay + 3)
             prompt = self.read_channel()
         if self.ansi_escape_codes:
             prompt = self.strip_ansi_escape_codes(prompt)
@@ -80,7 +134,7 @@ class CiscoVxrSSH(CiscoXrSSH):
             else:
                 log.info("Prompt not found. Time Waited: {}".format(current_time - start_time), 5)
                 self.write_channel(self.RETURN)
-                time.sleep(delay_factor * .1)
+                time.sleep(loop_delay)
 
             current_time = time.time()
 
@@ -90,7 +144,7 @@ class CiscoVxrSSH(CiscoXrSSH):
         prompt = prompt.strip()
         if not prompt:
             raise ValueError("Unable to find prompt: {}".format(prompt))
-        time.sleep(delay_factor * .1)
+        time.sleep(loop_delay)
         self.clear_buffer()
         return prompt
 
@@ -131,11 +185,11 @@ class CiscoVxrSSH(CiscoXrSSH):
         """
         # Time to delay in each read loop
         loop_delay = .2
+        delay_factor = 1
+
         config_large_msg = "This could be a few minutes if your config is large"
-        delay_factor = self.select_delay_factor(delay_factor)
-        log.info("In send_command, global_delay:{}, delay_factor:{}, max_read_timeout: {}".format(self.global_delay_factor,
-                                                                                                  delay_factor,
-                                                                                                  self.max_read_timeout))
+        log.info("In send_command, max_read_timeout: {}".format(self.max_read_timeout))
+
         # Find the current router prompt
         if expect_string is None:
             if auto_find_prompt:
@@ -152,7 +206,7 @@ class CiscoVxrSSH(CiscoXrSSH):
         if normalize:
             command_string = self.normalize_cmd(command_string)
 
-        time.sleep(delay_factor * loop_delay)
+        time.sleep(loop_delay)
         self.clear_buffer()
         self.write_channel(command_string)
 
@@ -165,6 +219,9 @@ class CiscoVxrSSH(CiscoXrSSH):
             if new_data:
                 if self.ansi_escape_codes:
                     new_data = self.strip_ansi_escape_codes(new_data)
+                # Replace Null Characters sent while checking session (alive) status
+                new_data = new_data.replace("^@", "")
+
                 output += new_data
                 try:
                     lines = output.split(self.RETURN)
@@ -193,11 +250,18 @@ class CiscoVxrSSH(CiscoXrSSH):
             current_time = time.time()
 
         else:  # nobreak
-            raise IOError("Search pattern never detected in send_command: {},\
-                            pattern found was: {}".format(search_pattern, output))
+            if not self.is_alive():
+                raise IOError(
+                    "Session went down while checking for prompt after sending command.\nSearch pattern: {}".format(search_pattern))
+            else:
+                if expect_string is None:
+                    raise IOError("Prompt not found after sending command and waiting for {} seconds.\nExpected Prompt: {}.\nOutput: {}".format(
+                        self.max_read_timeout, search_pattern, output))
+                else:
+                    raise IOError("Search Pattern not found after sending command and waiting for {} seconds.\nExpected Prompt: {}\nOutput: {}".format(
+                        self.max_read_timeout, search_pattern, output))
         if current_time - start_time >= 10:
             log.info("Command took {} seconds".format(current_time - start_time))
-        output = output.replace("^@","")
         output = self._sanitize_output(output, strip_command=strip_command,
                                        command_string=command_string, strip_prompt=strip_prompt)
         if use_textfsm:
