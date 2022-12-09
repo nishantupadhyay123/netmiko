@@ -71,6 +71,7 @@ class CiscoVxrSSH(CiscoXrSSH):
             else:
                 raise IOError("Prompt not found after waiting for {} seconds".format(self.max_read_timeout))
 
+        log.info("Prompt Found is: {}.".format(prompt))
         vxr_pattern = "last login"
         if vxr_pattern in prompt.lower():
             time.sleep(loop_delay + 3)
