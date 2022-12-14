@@ -141,10 +141,7 @@ class CiscoVxrSSH(CiscoXrSSH):
         # Find the current router prompt
         if expect_string is None:
             if auto_find_prompt:
-                try:
-                    prompt = self.find_prompt(delay_factor=delay_factor)
-                except ValueError:
-                    raise IOError("Prompt not Found before sending command")
+                prompt = self.find_prompt(delay_factor=delay_factor)
             else:
                 prompt = self.base_prompt
             search_pattern = re.escape(prompt.strip())
@@ -209,8 +206,6 @@ class CiscoVxrSSH(CiscoXrSSH):
                 else:
                     raise IOError("Search Pattern not found after sending command and waiting for {} seconds.\nExpected Prompt: {}\nOutput: {}".format(
                         self.max_read_timeout, search_pattern, output))
-        if current_time - start_time >= 10:
-            log.info("Command took {} seconds".format(current_time - start_time))
         output = self._sanitize_output(output, strip_command=strip_command,
                                        command_string=command_string, strip_prompt=strip_prompt)
         if use_textfsm:
