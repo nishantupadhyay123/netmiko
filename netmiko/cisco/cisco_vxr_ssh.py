@@ -32,13 +32,13 @@ class CiscoVxrSSH(CiscoXrSSH):
     CiscoVxrSSH is based of CiscoXrSSH -- CiscoBaseConnection
     """
 
-    def __init__(self,
-                 **kwargs):
+    def __init__(self, **kwargs):
         """Constructor
         """
         # 30 minutes
         self.max_read_timeout = kwargs.get('max_read_timeout', 1800)
         super().__init__(**kwargs)
+        self.blocking_timeout = self.max_read_timeout
 
     def find_prompt(self, delay_factor=1):
         """Finds the current network device prompt, last line only.
@@ -136,7 +136,7 @@ class CiscoVxrSSH(CiscoXrSSH):
         delay_factor = 1
 
         config_large_msg = "This could be a few minutes if your config is large"
-        log.info("In send_command, max_read_timeout: {}".format(self.max_read_timeout))
+        log.info("In send_command, max_read_timeout: {}, blocking_timeout: {}".format(self.max_read_timeout, self.blocking_timeout))
 
         # Find the current router prompt
         if expect_string is None:
