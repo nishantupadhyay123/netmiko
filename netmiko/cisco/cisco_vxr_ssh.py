@@ -214,7 +214,10 @@ class CiscoVxrSSH(CiscoXrSSH):
         return output
 
     # Code pasted from base_connection.send_command. This is to avoid breaking dialog commands.
-    # cisco_vxr_ssh.send_command uses self.is_alive() which sends NULL character which messes up dialog commands
+    # cisco_vxr_ssh.send_command uses self.is_alive(). is_alive is done by writing a NULL character downstream .
+    # the send method at paramiko channel , checks socket connection before writing null byte and returns an error and 
+    # set is_alive to false. This null byte was cauisng problems for interactive commands at router.
+    # this code is written to overcome that and will be looked in detail in drop 1/18/2023.
     def send_command_expect(self, command_string, expect_string=None,
                             delay_factor=1, max_loops=500, auto_find_prompt=True,
                             strip_prompt=True, strip_command=True, normalize=True,
